@@ -323,21 +323,54 @@
                 bestStreak: 0
             });
 
-            // Новые состояния
-            const [achievements, setAchievements] = useState([]);
-            const [completedToday, setCompletedToday] = useState([]);
+            // Система достижений С СОХРАНЕНИЕМ
+            const [achievements, setAchievements] = useState(() => {
+                try {
+                    const saved = localStorage.getItem('massGainAchievements');
+                    return saved ? JSON.parse(saved) : [];
+                } catch (error) {
+                    return [];
+                }
+            });
+
+            // Настройки С СОХРАНЕНИЕМ
+            const [settings, setSettings] = useState(() => {
+                try {
+                    const saved = localStorage.getItem('massGainSettings');
+                    return saved ? JSON.parse(saved) : {
+                        notificationsEnabled: true,
+                        soundEnabled: true,
+                        vibrationEnabled: true,
+                        reminderInterval: 5
+                    };
+                } catch (error) {
+                    return {
+                        notificationsEnabled: true,
+                        soundEnabled: true,
+                        vibrationEnabled: true,
+                        reminderInterval: 5
+                    };
+                }
+            });
+
+            // Выполненные задания С СОХРАНЕНИЕМ
+            const [completedToday, setCompletedToday] = useState(() => {
+                try {
+                    const saved = localStorage.getItem('massGainCompleted');
+                    const today = new Date().toDateString();
+                    const data = saved ? JSON.parse(saved) : {};
+                    return data[today] || [];
+                } catch (error) {
+                    return [];
+                }
+            });
+            // Остальные состояния
             const [showPlan, setShowPlan] = useState(false);
             const [expandedQuest, setExpandedQuest] = useState(null);
             const [currentTime, setCurrentTime] = useState(new Date());
             const [showSuccessAnimation, setShowSuccessAnimation] = useState(false);
             const [notifications, setNotifications] = useState([]);
             const [notificationPermission, setNotificationPermission] = useState('default');
-            const [settings, setSettings] = useState({
-                notificationsEnabled: true,
-                soundEnabled: true,
-                vibrationEnabled: true,
-                reminderInterval: 5 // минут до задания
-            });
             const [showSettings, setShowSettings] = useState(false);
             const [weeklyStats, setWeeklyStats] = useState({
                 completedDays: 0,
@@ -353,8 +386,53 @@
                 isAndroid: false,
                 isPWAInstalled: false
             });
+
+            // АВТОСОХРАНЕНИЕ всех данных + защита от потери при закрытии
+            useEffect(() => {
+                try {
+                    localStorage.setItem('massGainPlayer', JSON.stringify(player));
+                    localStorage.setItem('massGainAchievements', JSON.stringify(achievements));
+                    localStorage.setItem('massGainSettings', JSON.stringify(settings));
+                    
+                    // Сохранение выполненных заданий по дням
+                    const today = new Date().toDateString();
+                    const savedCompleted = localStorage.getItem('massGainCompleted');
+                    const completedData = savedCompleted ? JSON.parse(savedCompleted) : {};
+                    completedData[today] = completedToday;
+                    localStorage.setItem('massGainCompleted', JSON.stringify(completedData));
+                } catch (error) {
+                    console.log('Не удалось сохранить данные:', error);
+                }
+            }, [player, achievements, settings, completedToday]);
+
+            // Защита от потери данных при закрытии браузера
+            useEffect(() => {
+                const handleBeforeUnload = (e) => {
+                    try {
+                        // Финальное сохранение перед закрытием
+                        localStorage.setItem('massGainPlayer', JSON.stringify(player));
+                        localStorage.setItem('massGainSettings', JSON.stringify(settings));
+                        
+                        const today = new Date().toDateString();
+                        const savedCompleted = localStorage.getItem('massGainCompleted');
+                        const completedData = savedCompleted ? JSON.parse(savedCompleted) : {};
+                        completedData[today] = completedToday;
+                        localStorage.setItem('massGainCompleted', JSON.stringify(completedData));
+                    } catch (error) {
+                        console.log('Ошибка финального сохранения:', error);
+                    }
+                };
+
+                window.addEventListener('beforeunload', handleBeforeUnload);
+                window.addEventListener('pagehide', handleBeforeUnload);
+                
+                return () => {
+                    window.removeEventListener('beforeunload', handleBeforeUnload);
+                    window.removeEventListener('pagehide', handleBeforeUnload);
+                };
+            }, [player, settings, completedToday]);
             
-            // Определение устройства и PWA статуса
+            // Определение устройства и автоматический запрос уведомлений
             useEffect(() => {
                 const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
                 const isAndroid = /Android/.test(navigator.userAgent);
@@ -362,9 +440,18 @@
                 
                 setDeviceInfo({ isIOS, isAndroid, isPWAInstalled });
                 setIsStandalone(isPWAInstalled);
-            }, []);
+
+                // Автоматический запрос уведомлений через 3 секунды
+                const timer = setTimeout(() => {
+                    if (settings.notificationsEnabled && notificationPermission === 'default') {
+                        requestNotificationPermission();
+                    }
+                }, 3000);
+
+                return () => clearTimeout(timer);
+            }, [settings.notificationsEnabled, notificationPermission, requestNotificationPermission]);
             
-            // Рефы для уведомлений (упрощенные)
+            // Рефы для уведомлений
             const lastNotificationQuest = useRef(null);
 
             // Звуки для уведомлений (Web Audio API)
@@ -435,17 +522,33 @@
                 }
             };
 
-            // Запрос разрешений на уведомления
+            // Запрос разрешений на уведомления (ИСПРАВЛЕНО для мобильных)
             const requestNotificationPermission = useCallback(async () => {
                 if ('Notification' in window) {
-                    const permission = await Notification.requestPermission();
-                    setNotificationPermission(permission);
-                    return permission === 'granted';
+                    try {
+                        const permission = await Notification.requestPermission();
+                        setNotificationPermission(permission);
+                        
+                        if (permission === 'granted') {
+                            // Показать тестовое уведомление
+                            new Notification('Mass Gain RPG', {
+                                body: 'Уведомления включены! 💪',
+                                icon: '/icon-192.png',
+                                badge: '/badge-72.png',
+                                tag: 'welcome'
+                            });
+                        }
+                        
+                        return permission === 'granted';
+                    } catch (error) {
+                        console.log('Notification permission error:', error);
+                        return false;
+                    }
                 }
                 return false;
             }, []);
 
-            // Показать всплывающее уведомление
+            // УЛУЧШЕННЫЕ уведомления с фоновой работой
             const showNotification = useCallback((quest, type = 'new') => {
                 if (!settings.notificationsEnabled) return;
 
@@ -470,22 +573,36 @@
                 playNotificationSound();
                 vibrate();
 
-                // Браузерное уведомление
+                // Браузерное уведомление (работает в фоне)
                 if (notificationPermission === 'granted' && 'Notification' in window) {
                     try {
-                        new Notification(notification.title, {
+                        const browserNotification = new Notification(notification.title, {
                             body: `${quest.time} - ${quest.title}`,
-                            icon: '/favicon.ico',
-                            badge: '/favicon.ico',
+                            icon: 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNjQiIGhlaWdodD0iNjQiIHZpZXdCb3g9IjAgMCA2NCA2NCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHJlY3Qgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiBmaWxsPSIjMDAwMDAwIiByeD0iMTYiLz4KPHN2ZyB4PSIxNiIgeT0iMTYiIHdpZHRoPSIzMiIgaGVpZ2h0PSIzMiIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSJub25lIiBzdHJva2U9IiNmZmZmZmYiIHN0cm9rZS13aWR0aD0iMiI+CjxwYXRoIGQ9Ik02LjUgNi41aDExdjExaC0xMXoiLz4KPHBhdGggZD0iTTQgMTJoMiIvPgo8cGF0aCBkPSJNMTggMTJoMiIvPgo8cGF0aCBkPSJNMTIgNHYyIi8+CjxwYXRoIGQ9Ik0xMiAxOHYyIi8+Cjwvc3ZnPgo8L3N2Zz4K',
+                            badge: 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNzIiIGhlaWdodD0iNzIiIHZpZXdCb3g9IjAgMCA3MiA3MiIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPGNpcmNsZSBjeD0iMzYiIGN5PSIzNiIgcj0iMzYiIGZpbGw9IiMwMDAwMDAiLz4KPHN2ZyB4PSIyNCIgeT0iMjQiIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSJub25lIiBzdHJva2U9IiNmZmZmZmYiIHN0cm9rZS13aWR0aD0iMiI+CjxwYXRoIGQ9Ik02LjUgNi41aDExdjExaC0xMXoiLz4KPC9zdmc+Cjwvc3ZnPgo=',
                             tag: `quest-${quest.id}`,
-                            requireInteraction: true
+                            requireInteraction: type !== 'completed',
+                            vibrate: [200, 100, 200],
+                            actions: type === 'new' ? [
+                                {
+                                    action: 'open',
+                                    title: 'Открыть',
+                                    icon: 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjQiIGhlaWdodD0iMjQiIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHBhdGggZD0iTTMgOWw5LTcgOSA3djExYTIgMiAwIDAgMS0yIDJINWEyIDIgMCAwIDEtMi0yeiIgc3Ryb2tlPSJ3aGl0ZSIgc3Ryb2tlLXdpZHRoPSIyIiBmaWxsPSJub25lIi8+CjwvcGF0aD4KPC9zdmc+'
+                                }
+                            ] : []
                         });
+
+                        // Автозакрытие через время
+                        setTimeout(() => {
+                            browserNotification.close();
+                        }, type === 'completed' ? 3000 : 10000);
+
                     } catch (error) {
                         console.log('Браузерное уведомление недоступно:', error);
                     }
                 }
 
-                // Автоматически скрыть через 5 секунд
+                // Автоматически скрыть локальное уведомление
                 setTimeout(() => {
                     setNotifications(prev => prev.filter(n => n.id !== notification.id));
                 }, 5000);
@@ -734,17 +851,22 @@
                 return () => clearInterval(timer);
             }, []);
 
-            // Мониторинг новых заданий для уведомлений (упрощенный)
+            // Мониторинг новых заданий для уведомлений (ВОССТАНОВЛЕНО)
             useEffect(() => {
                 if (!settings.notificationsEnabled) return;
 
                 const availableIndex = getCurrentAvailableQuest();
                 const currentQuest = availableIndex >= 0 ? dailyQuests[availableIndex] : null;
                 
-                if (currentQuest && !completedToday.includes(currentQuest.id)) {
-                    // Простая проверка без сложной логики таймеров
+                // Проверяем, есть ли новое доступное задание
+                if (currentQuest && lastNotificationQuest.current !== currentQuest.id) {
+                    // Проверяем, не выполнено ли уже это задание
+                    if (!completedToday.includes(currentQuest.id)) {
+                        showNotification(currentQuest, 'new');
+                        lastNotificationQuest.current = currentQuest.id;
+                    }
                 }
-            }, [currentTime, completedToday, settings.notificationsEnabled]);
+            }, [currentTime, completedToday, settings.notificationsEnabled, showNotification, getCurrentAvailableQuest, dailyQuests]);
 
             // Запрос разрешений при первой загрузке
             useEffect(() => {
@@ -881,6 +1003,9 @@
                 setPlayer(newPlayer);
                 setCompletedToday(prev => [...prev, questId]);
 
+                // Уведомление о выполнении
+                showNotification(quest, 'completed');
+
                 // Haptic feedback для успеха
                 hapticFeedback('success');
 
@@ -897,7 +1022,7 @@
                 // Проверка достижений
                 checkAchievements(newPlayer, completedToday.length + 1);
 
-            }, [player, completedToday, dailyQuests, getCurrentAvailableQuest, hapticFeedback]);
+            }, [player, completedToday, dailyQuests, getCurrentAvailableQuest, showNotification, hapticFeedback]);
 
             // Система достижений
             const checkAchievements = useCallback((newPlayer, completedCount) => {
@@ -972,7 +1097,7 @@
                         ))}
                     </div>
 
-                    {/* PWA Install Banner (упрощенный) */}
+                    {/* PWA Install Banner с улучшенной информацией */}
                     {deviceInfo.isIOS && !isStandalone && (
                         <div className="fixed bottom-4 left-4 right-4 z-50">
                             <div className="glass-effect rounded-2xl p-4 border border-white border-opacity-20">
@@ -980,7 +1105,8 @@
                                     <div className="text-2xl">📱</div>
                                     <div className="flex-1">
                                         <h4 className="font-bold text-sm">Установить как приложение</h4>
-                                        <p className="text-xs text-gray-400">Safari → Поделиться → На экран Домой</p>
+                                        <p className="text-xs text-gray-400">Для лучшей работы уведомлений и сохранения данных</p>
+                                        <p className="text-xs text-yellow-400 mt-1">Safari → Поделиться → На экран Домой</p>
                                     </div>
                                     <button 
                                         onClick={() => setDeviceInfo(prev => ({...prev, isIOS: false}))}
@@ -1019,7 +1145,7 @@
                                         {currentTime.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}
                                     </div>
                                     <div className="text-xs text-white mt-1">
-                                        {completionPercentage.toFixed(0)}% выполнено
+                                        {completionPercentage.toFixed(0)}% выполнено • Автосохранение
                                     </div>
                                 </div>
                                 <button 
@@ -1112,17 +1238,43 @@
                                             <h4 className="font-semibold mb-3 flex items-center">
                                                 📱 Статус приложения
                                             </h4>
-                                            <div className="text-sm text-gray-300">
+                                            <div className="text-sm text-gray-300 space-y-1">
                                                 <p>📱 <strong>Устройство:</strong> {deviceInfo.isIOS ? 'iPhone/iPad' : deviceInfo.isAndroid ? 'Android' : 'Desktop'}</p>
                                                 <p>📍 <strong>Режим:</strong> {isStandalone ? 'Приложение' : 'Браузер'}</p>
+                                                <p>💾 <strong>Сохранение:</strong> {typeof(Storage) !== "undefined" ? 'Автоматическое ✅' : 'Недоступно ❌'}</p>
+                                                <p>🔔 <strong>Уведомления:</strong> {notificationPermission === 'granted' ? 'Работают ✅' : 'Выключены'}</p>
+                                            </div>
+                                            <div className="mt-3 text-xs text-gray-400">
+                                                💡 Данные сохраняются локально и не покидают твое устройство
                                             </div>
                                         </div>
                                         
                                         {settings.notificationsEnabled && (
-                                            <div className="mt-4 p-3 rounded-xl bg-white bg-opacity-10">
-                                                <p className="text-xs text-gray-400">
-                                                    💡 Подсказка: В браузере может появиться запрос на разрешение уведомлений
-                                                </p>
+                                            <div className="mt-4 space-y-3">
+                                                <button
+                                                    onClick={requestNotificationPermission}
+                                                    className="w-full py-3 rounded-2xl bg-white bg-opacity-20 border border-white text-white hover:bg-opacity-30 transition-colors"
+                                                >
+                                                    🔔 {notificationPermission === 'granted' ? 'Уведомления включены ✅' : 'Включить уведомления'}
+                                                </button>
+                                                
+                                                {notificationPermission === 'granted' && (
+                                                    <button
+                                                        onClick={() => {
+                                                            const testQuest = dailyQuests[0];
+                                                            showNotification(testQuest, 'new');
+                                                        }}
+                                                        className="w-full py-2 rounded-xl bg-yellow-500 bg-opacity-20 border border-yellow-400 text-yellow-300 hover:bg-opacity-30 transition-colors text-sm"
+                                                    >
+                                                        🧪 Тест уведомления
+                                                    </button>
+                                                )}
+                                                
+                                                <div className="text-xs text-gray-400 space-y-1">
+                                                    <p>• На iPhone: Добавь сайт на домашний экран для лучшей работы</p>
+                                                    <p>• На Android: Уведомления работают в любом режиме</p>
+                                                    <p>• Статус: {notificationPermission === 'granted' ? '✅ Разрешено' : notificationPermission === 'denied' ? '❌ Заблокировано в браузере' : '⏳ Не запрошено'}</p>
+                                                </div>
                                             </div>
                                         )}
                                     </div>
