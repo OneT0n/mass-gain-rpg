@@ -421,7 +421,6 @@
                 try {
                     localStorage.setItem('massGainPlayer', JSON.stringify(player));
                     localStorage.setItem('massGainAchievements', JSON.stringify(achievements));
-                    localStorage.setItem('massGainSettings', JSON.stringify(settings));
                     
                     const today = new Date().toDateString();
                     const savedCompleted = localStorage.getItem('massGainCompleted');
@@ -437,14 +436,31 @@
                     console.error('Save error:', error);
                     setTimeout(() => setSaveStatus('loaded'), 5000);
                 }
-            }, [player, achievements, settings, completedToday]);
+            }, [player, achievements, completedToday]);
+
+            // Отдельное сохранение настроек
+            useEffect(() => {
+                try {
+                    localStorage.setItem('massGainSettings', JSON.stringify(settings));
+                    console.log('Settings saved:', settings);
+                } catch (error) {
+                    console.error('Settings save error:', error);
+                }
+            }, [settings]);
+
+            // Отдельная проверка разрешений уведомлений при загрузке
+            useEffect(() => {
+                if ('Notification' in window) {
+                    setNotificationPermission(Notification.permission);
+                }
+            }, []);
 
             useEffect(() => {
                 const timer = setTimeout(() => {
                     saveGameState();
                 }, 1000);
                 return () => clearTimeout(timer);
-            }, [player, completedToday, achievements, settings]);
+            }, [player, completedToday, achievements]);
 
             useEffect(() => {
                 const handleVisibilityChange = () => {
@@ -486,14 +502,15 @@
                 setDeviceInfo({ isIOS, isAndroid, isPWAInstalled, installBannerDismissed });
                 setIsStandalone(isPWAInstalled);
 
+                // Автоматический запрос уведомлений только если они включены в настройках
                 const timer = setTimeout(() => {
-                    if (settings.notificationsEnabled && notificationPermission === 'default') {
+                    if (settings.notificationsEnabled && Notification.permission === 'default') {
                         requestNotificationPermission();
                     }
                 }, 3000);
 
                 return () => clearTimeout(timer);
-            }, [settings.notificationsEnabled, notificationPermission]);
+            }, []);
             
             const lastNotificationQuest = useRef(null);
 
@@ -909,11 +926,15 @@
                 }
             }, [currentTime, completedToday, settings.notificationsEnabled, showNotification, getCurrentAvailableQuest, dailyQuests]);
 
+            // Отдельный useEffect для запроса разрешений при включении уведомлений
             useEffect(() => {
-                if (settings.notificationsEnabled && notificationPermission === 'default') {
-                    requestNotificationPermission();
+                if (settings.notificationsEnabled && notificationPermission !== 'granted') {
+                    const timer = setTimeout(() => {
+                        requestNotificationPermission();
+                    }, 1000);
+                    return () => clearTimeout(timer);
                 }
-            }, [settings.notificationsEnabled, requestNotificationPermission]);
+            }, [settings.notificationsEnabled]);
 
             const getTimeUntilNext = useCallback(() => {
                 const availableIndex = getCurrentAvailableQuest();
@@ -1221,7 +1242,17 @@
                                                     <input 
                                                         type="checkbox"
                                                         checked={settings.notificationsEnabled}
-                                                        onChange={(e) => setSettings(prev => ({...prev, notificationsEnabled: e.target.checked}))}
+                                                        onChange={(e) => {
+                                                            const newSettings = {...settings, notificationsEnabled: e.target.checked};
+                                                            setSettings(newSettings);
+                                                            // Принудительное сохранение
+                                                            try {
+                                                                localStorage.setItem('massGainSettings', JSON.stringify(newSettings));
+                                                                console.log('Notifications setting saved:', e.target.checked);
+                                                            } catch (error) {
+                                                                console.error('Failed to save notification setting:', error);
+                                                            }
+                                                        }}
                                                         className="w-4 h-4 rounded"
                                                     />
                                                 </label>
@@ -1230,7 +1261,10 @@
                                                     <input 
                                                         type="checkbox"
                                                         checked={settings.soundEnabled}
-                                                        onChange={(e) => setSettings(prev => ({...prev, soundEnabled: e.target.checked}))}
+                                                        onChange={(e) => {
+                                                            const newSettings = {...settings, soundEnabled: e.target.checked};
+                                                            setSettings(newSettings);
+                                                        }}
                                                         className="w-4 h-4 rounded"
                                                     />
                                                 </label>
@@ -1239,7 +1273,10 @@
                                                     <input 
                                                         type="checkbox"
                                                         checked={settings.vibrationEnabled}
-                                                        onChange={(e) => setSettings(prev => ({...prev, vibrationEnabled: e.target.checked}))}
+                                                        onChange={(e) => {
+                                                            const newSettings = {...settings, vibrationEnabled: e.target.checked};
+                                                            setSettings(newSettings);
+                                                        }}
                                                         className="w-4 h-4 rounded"
                                                     />
                                                 </label>
@@ -1247,7 +1284,10 @@
                                                     <label className="block text-sm mb-2">Напоминание через:</label>
                                                     <select 
                                                         value={settings.reminderInterval}
-                                                        onChange={(e) => setSettings(prev => ({...prev, reminderInterval: Number(e.target.value)}))}
+                                                        onChange={(e) => {
+                                                            const newSettings = {...settings, reminderInterval: Number(e.target.value)};
+                                                            setSettings(newSettings);
+                                                        }}
                                                         className="w-full p-2 rounded-lg bg-white bg-opacity-10 text-white"
                                                     >
                                                         <option value={0}>Выключено</option>
@@ -1269,6 +1309,7 @@
                                                 <p>📍 <strong>Режим:</strong> {isStandalone ? 'Приложение' : 'Браузер'}</p>
                                                 <p>💾 <strong>Сохранение:</strong> {typeof(Storage) !== "undefined" ? 'Автоматическое ✅' : 'Недоступно ❌'}</p>
                                                 <p>🔔 <strong>Уведомления:</strong> {notificationPermission === 'granted' ? 'Работают ✅' : 'Выключены'}</p>
+                                                <p>🔔 <strong>Настройка уведомлений:</strong> {settings.notificationsEnabled ? 'Включены ✅' : 'Выключены ❌'}</p>
                                                 <p>⚡ <strong>Опыт:</strong> {player.exp}/{player.expToNext} (Level {player.level})</p>
                                                 <p>📊 <strong>Заданий:</strong> {completedToday.length}/25 сегодня</p>
                                             </div>
@@ -1279,9 +1320,11 @@
                                                 <button
                                                     onClick={() => {
                                                         try {
-                                                            const saved = localStorage.getItem('massGainPlayer');
-                                                            const parsedData = saved ? JSON.parse(saved) : null;
-                                                            alert(`Сохраненные данные:\nУровень: ${parsedData?.level || 'не найден'}\nОпыт: ${parsedData?.exp || 'не найден'}\nЗаданий: ${parsedData?.tasksCompleted || 'не найдено'}\n\nТекущие данные:\nУровень: ${player.level}\nОпыт: ${player.exp}\nЗаданий: ${player.tasksCompleted}`);
+                                                            const savedPlayer = localStorage.getItem('massGainPlayer');
+                                                            const savedSettings = localStorage.getItem('massGainSettings');
+                                                            const parsedPlayer = savedPlayer ? JSON.parse(savedPlayer) : null;
+                                                            const parsedSettings = savedSettings ? JSON.parse(savedSettings) : null;
+                                                            alert(`Сохраненные данные:\nУровень: ${parsedPlayer?.level || 'не найден'}\nОпыт: ${parsedPlayer?.exp || 'не найден'}\nЗаданий: ${parsedPlayer?.tasksCompleted || 'не найдено'}\nУведомления: ${parsedSettings?.notificationsEnabled ? 'включены' : 'выключены'}\n\nТекущие данные:\nУровень: ${player.level}\nОпыт: ${player.exp}\nЗаданий: ${player.tasksCompleted}\nУведомления: ${settings.notificationsEnabled ? 'включены' : 'выключены'}`);
                                                         } catch (error) {
                                                             alert('Ошибка проверки сохранения: ' + error.message);
                                                         }
@@ -1294,6 +1337,13 @@
                                                     onClick={() => {
                                                         console.log('🔄 Принудительное сохранение...');
                                                         saveGameState();
+                                                        // Принудительное сохранение настроек
+                                                        try {
+                                                            localStorage.setItem('massGainSettings', JSON.stringify(settings));
+                                                            console.log('Settings force saved:', settings);
+                                                        } catch (error) {
+                                                            console.error('Settings force save error:', error);
+                                                        }
                                                     }}
                                                     className="flex-1 py-2 rounded-xl bg-green-500 bg-opacity-20 border border-green-400 text-green-300 hover:bg-opacity-30 transition-colors text-sm"
                                                 >
